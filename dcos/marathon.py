@@ -1,7 +1,6 @@
 import json
-from distutils.version import LooseVersion
 
-from dcos import http, util
+from dcos import config, http, util
 from dcos.errors import DCOSException, DCOSHTTPException
 
 from six.moves import urllib
@@ -9,37 +8,39 @@ from six.moves import urllib
 logger = util.get_logger(__name__)
 
 
-def create_client(config=None):
+def create_client(toml_config=None):
     """Creates a Marathon client with the supplied configuration.
 
-    :param config: configuration dictionary
-    :type config: config.Toml
+    :param toml_config: configuration dictionary
+    :type toml_config: config.Toml
     :returns: Marathon client
     :rtype: dcos.marathon.Client
     """
 
-    if config is None:
-        config = util.get_config()
+    if toml_config is None:
+        toml_config = config.get_config()
 
-    marathon_url = _get_marathon_url(config)
-    timeout = config.get('core.timeout', http.DEFAULT_TIMEOUT)
+    marathon_url = _get_marathon_url(toml_config)
+    timeout = config.get_config_val('core.timeout') or http.DEFAULT_TIMEOUT
 
     logger.info('Creating marathon client with: %r', marathon_url)
     return Client(marathon_url, timeout=timeout)
 
 
-def _get_marathon_url(config):
+def _get_marathon_url(toml_config):
     """
-    :param config: configuration dictionary
-    :type config: config.Toml
+    :param toml_config: configuration dictionary
+    :type toml_config: config.Toml
     :returns: marathon base url
     :rtype: str
     """
 
-    marathon_url = config.get('marathon.url')
+    marathon_url = config.get_config_val('marathon.url', toml_config)
     if marathon_url is None:
-        dcos_url = util.get_config_vals(['core.dcos_url'], config)[0]
-        marathon_url = urllib.parse.urljoin(dcos_url, 'marathon/')
+        dcos_url = config.get_config_val('core.dcos_url', toml_config)
+        if dcos_url is None:
+            raise config.missing_config_exception(['core.dcos_url'])
+        marathon_url = urllib.parse.urljoin(dcos_url, 'service/marathon/')
 
     return marathon_url
 
@@ -129,18 +130,10 @@ class Client(object):
     """
 
     def __init__(self, marathon_url, timeout=http.DEFAULT_TIMEOUT):
+        if not marathon_url.endswith('/'):
+            marathon_url += '/'
         self._base_url = marathon_url
         self._timeout = timeout
-
-        min_version = "0.8.1"
-        version = LooseVersion(self.get_about()["version"])
-        self._version = version
-        if version < LooseVersion(min_version):
-            msg = ("The configured Marathon with version {0} is outdated. " +
-                   "Please use version {1} or later.").format(
-                       version,
-                       min_version)
-            raise DCOSException(msg)
 
     def _create_url(self, path):
         """Creates the url from the provided path.
@@ -151,14 +144,6 @@ class Client(object):
         """
 
         return urllib.parse.urljoin(self._base_url, path)
-
-    def get_version(self):
-        """Get marathon version
-        :returns: marathon version
-        rtype: LooseVersion
-        """
-
-        return self._version
 
     def get_about(self):
         """Returns info about Marathon instance
@@ -669,22 +654,36 @@ class Client(object):
 
         return task
 
-    def get_app_schema(self):
-        """Returns app json schema
+    def stop_task(self, task_id, wipe=None):
+        """Stops a task.
 
-        :returns: application json schema
-        :rtype: json schema or None if endpoint doesn't exist
+        :param task_id: the ID of the task
+        :type task_id: str
+        :param wipe: whether remove reservations and persistent volumes.
+        :type wipe: bool
+        :returns: a tasks
+        :rtype: dict
         """
 
-        version = self.get_version()
-        schema_version = LooseVersion("0.9.0")
-        if version < schema_version:
-            return None
+        if not wipe:
+            params = None
+        else:
+            params = {'wipe': 'true'}
 
-        url = self._create_url('v2/schemas/app')
-        response = _http_req(http.get, url, timeout=self._timeout)
+        url = self._create_url('v2/tasks/delete')
 
-        return response.json()
+        response = _http_req(http.post,
+                             url,
+                             params=params,
+                             json={'ids': [task_id]},
+                             timeout=self._timeout)
+
+        task = next(
+            (task for task in response.json()['tasks']
+             if task_id == task['id']),
+            None)
+
+        return task
 
     def normalize_app_id(self, app_id):
         """Normalizes the application id.

@@ -1,15 +1,108 @@
 import collections
 import copy
 import json
+import os
+import stat
+import sys
 
 import pkg_resources
 import toml
-from dcos import emitting, jsonitem, subcommand, util
+from dcos import constants, jsonitem, subcommand, util
 from dcos.errors import DCOSException
 
-emitter = emitting.FlatEmitter()
-
 logger = util.get_logger(__name__)
+
+
+def get_config_path():
+    """ Returns the path to the DCOS config file.
+
+    :returns: path to the DCOS config file
+    :rtype: str
+    """
+
+    return os.environ.get(constants.DCOS_CONFIG_ENV, get_default_config_path())
+
+
+def get_default_config_path():
+    """Returns the default path to the DCOS config file.
+
+    :returns: path to the DCOS config file
+    :rtype: str
+    """
+
+    return os.path.expanduser(
+        os.path.join("~",
+                     constants.DCOS_DIR,
+                     'dcos.toml'))
+
+
+def get_config(mutable=False):
+    """Returns the DCOS configuration object and creates config file is None
+    found and `DCOS_CONFIG` set to default value. Only use to get the config,
+    not to resolve a specific config parameter. This should be done with
+    `get_config_val`.
+
+    :param mutable: True if the returned Toml object should be mutable
+    :type mutable: boolean
+    :returns: Configuration object
+    :rtype: Toml | MutableToml
+    """
+
+    path = get_config_path()
+    default = get_default_config_path()
+
+    if path == default:
+        util.ensure_dir_exists(os.path.dirname(default))
+    return load_from_path(path, mutable)
+
+
+def get_config_val(name, config=None):
+    """Returns the config value for the specified key. Looks for corresponding
+    environment variable first, and if it doesn't exist, uses the config value.
+    - "core" properties get resolved to env variable DCOS_SUBKEY. With the
+    exception of subkeys that already start with DCOS, in which case we look
+    for SUBKEY first, and "DCOS_SUBKEY" second, and finally the config value.
+    - everything else gets resolved to DCOS_SECTION_SUBKEY
+
+    :param name: name of paramater
+    :type name: str
+    :param config: config
+    :type config: Toml
+    :returns: value of 'name' parameter
+    :rtype: str | None
+    """
+
+    if config is None:
+        config = get_config()
+
+    section, subkey = split_key(name.upper())
+
+    env_var = None
+    if section == "CORE":
+        if subkey.startswith("DCOS") and os.environ.get(subkey):
+            env_var = subkey
+        else:
+            env_var = "DCOS_{}".format(subkey)
+    else:
+        env_var = "DCOS_{}_{}".format(section, subkey)
+
+    return os.environ.get(env_var) or config.get(name)
+
+
+def missing_config_exception(keys):
+    """ DCOSException for a missing config value
+
+    :param keys: keys in the config dict
+    :type keys: [str]
+    :returns: DCOSException
+    :rtype: DCOSException
+    """
+
+    msg = '\n'.join(
+        'Missing required config parameter: "{0}".'.format(key) +
+        '  Please run `dcos config set {0} <value>`.'.format(key)
+        for key in keys)
+    return DCOSException(msg)
 
 
 def set_val(name, value):
@@ -18,11 +111,11 @@ def set_val(name, value):
     :type name: str
     :param value: value to set to paramater `name`
     :type param: str
-    :returns: Toml config
-    :rtype: Toml
+    :returns: Toml config, message of change
+    :rtype: Toml, str
     """
 
-    toml_config = util.get_config(True)
+    toml_config = get_config(True)
 
     section, subkey = split_key(name)
 
@@ -43,18 +136,44 @@ def set_val(name, value):
 
     save(toml_config)
 
-    if not value_exists:
-        emitter.publish("[{}]: set to '{}'".format(name, new_value))
+    msg = "[{}]: ".format(name)
+    if name == "core.dcos_acs_token":
+        if not value_exists:
+            msg += "set"
+        elif old_value == new_value:
+            msg += "already set to that value"
+        else:
+            msg += "changed"
+    elif not value_exists:
+        msg += "set to '{}'".format(new_value)
     elif old_value == new_value:
-        emitter.publish("[{}]: already set to '{}'".format(name, old_value))
+        msg += "already set to '{}'".format(old_value)
     else:
-        emitter.publish(
-            "[{}]: changed from '{}' to '{}'".format(
-                name,
-                old_value,
-                new_value))
+        msg += "changed from '{}' to '{}'".format(old_value, new_value)
 
-    return toml_config
+    return toml_config, msg
+
+
+def _enforce_config_permissions(path):
+    """Enfore 600 permissions on config file
+
+    :param path: Path to the TOML file
+    :type path: str
+    :rtype: None
+    """
+
+    # Unix permissions are incompatible with windows
+    # TODO: https://github.com/dcos/dcos-cli/issues/662
+    if sys.platform == 'win32':
+        return
+    else:
+        permissions = oct(stat.S_IMODE(os.lstat(path).st_mode))
+        if permissions not in ['0o600', '0600']:
+            msg = (
+                "Permissions '{}' for configuration file '{}' are too open. "
+                "File must only be accessible by owner. "
+                "Aborting...".format(permissions, path))
+            raise DCOSException(msg)
 
 
 def load_from_path(path, mutable=False):
@@ -69,6 +188,7 @@ def load_from_path(path, mutable=False):
     """
 
     util.ensure_file_exists(path)
+    _enforce_config_permissions(path)
     with util.open_file(path, 'r') as config_file:
         try:
             toml_obj = toml.loads(config_file.read())
@@ -85,7 +205,8 @@ def save(toml_config):
     """
 
     serial = toml.dumps(toml_config._dictionary)
-    path = util.get_config_path()
+    path = get_config_path()
+    _enforce_config_permissions(path)
     with util.open_file(path, 'w') as config_file:
         config_file.write(serial)
 
@@ -110,11 +231,11 @@ def unset(name):
     """
     :param name: name of config value to unset
     :type name: str
-    :returns: process status
-    :rtype: None
+    :returns: message of property removed
+    :rtype: str
     """
 
-    toml_config = util.get_config(True)
+    toml_config = get_config(True)
     toml_config_pre = copy.deepcopy(toml_config)
     section = name.split(".", 1)[0]
     if section not in toml_config_pre._dictionary:
@@ -125,9 +246,8 @@ def unset(name):
     elif isinstance(value, collections.Mapping):
         raise DCOSException(_generate_choice_msg(name, value))
     else:
-        emitter.publish("Removed [{}]".format(name))
         save(toml_config)
-        return
+        return "Removed [{}]".format(name)
 
 
 def _generate_choice_msg(name, value):
@@ -203,9 +323,33 @@ def get_config_schema(command):
             pkg_resources.resource_string(
                 'dcos',
                 'data/config-schema/core.json').decode('utf-8'))
+    elif command in subcommand.default_subcommands():
+        return json.loads(
+            pkg_resources.resource_string(
+                'dcos',
+                'data/config-schema/{}.json'.format(command)).decode('utf-8'))
+    else:
+        executable = subcommand.command_executables(command)
+        return subcommand.config_schema(executable, command)
 
-    executable = subcommand.command_executables(command)
-    return subcommand.config_schema(executable)
+
+def get_property_description(section, subkey):
+    """
+    :param section: section of config paramater
+    :type section: str
+    :param subkey: property within 'section'
+    :type subkey: str
+    :returns: description of section.subkey or None if no description
+    :rtype: str | None
+    """
+
+    schema = get_config_schema(section)
+    property_info = schema["properties"].get(subkey)
+    if property_info is not None:
+        return property_info.get("description")
+    else:
+        raise DCOSException(
+            "No schema found found for {}.{}".format(section, subkey))
 
 
 def check_config(toml_config_pre, toml_config_post):

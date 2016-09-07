@@ -123,7 +123,7 @@ def app_task_table(tasks):
         ("APP", lambda t: t["appId"]),
         ("HEALTHY", lambda t:
          all(check['alive'] for check in t.get('healthCheckResults', []))),
-        ("STARTED", lambda t: t["startedAt"]),
+        ("STARTED", lambda t: t.get("startedAt", "N/A")),
         ("HOST", lambda t: t["host"]),
         ("ID", lambda t: t["id"])
     ])
@@ -184,7 +184,7 @@ def deployment_table(deployments):
 
 
 def service_table(services):
-    """Returns a PrettyTable representation of the provided DCOS services.
+    """Returns a PrettyTable representation of the provided DC/OS services.
 
     :param services: services to render
     :type services: [Framework]
@@ -207,6 +207,125 @@ def service_table(services):
     tb.align["NAME"] = 'l'
 
     return tb
+
+
+def job_table(job_list):
+    """Returns a PrettyTable representation of the job list from Metronome.
+
+    :param job_list: jobs to render
+    :type job_list: [job]
+    :rtype: PrettyTable
+    """
+
+    fields = OrderedDict([
+        ('id', lambda s: s['id']),
+        ('Description', lambda s:
+            _truncate_desc(s['description'] if 'description' in s else '')),
+        ('Status', lambda s: _job_status(s)),
+        ('Last Succesful Run', lambda s: s['history']['lastSuccessAt']
+            if 'history' in s else 'N/A'),
+    ])
+    tb = table(fields, job_list, sortby="ID")
+    tb.align['ID'] = 'l'
+    tb.align["DESCRIPTION"] = 'l'
+    tb.align["STATUS"] = 'l'
+
+    return tb
+
+
+def job_history_table(schedule_list):
+    """Returns a PrettyTable representation of the job history from Metronome.
+
+    :param schedule_list: job schedule list to render
+    :type schedule_list: [history]
+    :rtype: PrettyTable
+    """
+
+    fields = OrderedDict([
+        ('id', lambda s: s['id']),
+        ('started', lambda s: s['createdAt']),
+        ('finished', lambda s: s['finishedAt']),
+    ])
+    tb = table(fields, schedule_list, sortby="STARTED")
+    tb.align['ID'] = 'l'
+
+    return tb
+
+
+def schedule_table(schedule_list):
+    """Returns a PrettyTable representation of the schedule list of a job
+    from Metronome.
+
+    :param schedule_list: schedules to render
+    :type schedule_list: [schedule]
+    :rtype: PrettyTable
+    """
+
+    fields = OrderedDict([
+        ('id', lambda s: s['id']),
+        ('cron', lambda s: s['cron']),
+        ('enabled', lambda s: s['enabled']),
+        ('next run', lambda s: s['nextRunAt']),
+        ('concurrency policy', lambda s: s['concurrencyPolicy']),
+    ])
+    tb = table(fields, schedule_list)
+    tb.align['ID'] = 'l'
+    tb.align['CRON'] = 'l'
+
+    return tb
+
+
+def job_runs_table(runs_list):
+    """Returns a PrettyTable representation of the runs list of a job from
+    Metronome.
+
+    :param runs_list: current runs of a job to render
+    :type runs_list: [runs]
+    :rtype: PrettyTable
+    """
+    fields = OrderedDict([
+        ('job id', lambda s: s['jobId']),
+        ('id', lambda s: s['id']),
+        ('started at', lambda s: s['createdAt']),
+    ])
+    tb = table(fields, runs_list)
+    tb.align['ID'] = 'l'
+    tb.align['JOB ID'] = 'l'
+
+    return tb
+
+
+def _truncate_desc(description, truncation_size=35):
+    """Utility function that truncates a string for formatting.
+
+    :param description: description
+    :type description: str
+    :rtype: str
+
+    """
+
+    if(len(description) > truncation_size):
+        return description[:truncation_size] + '..'
+    else:
+        return description
+
+
+def _job_status(job):
+    """Utility function that returns the status of a job
+
+    :param job: job json
+    :type job: json
+    :rtype: str
+
+    """
+
+    if 'activeRuns' in job:
+        return "Running"
+    # short circuit will prevent failure
+    elif 'schedules' not in job or not job['schedules']:
+        return "Unscheduled"
+    else:
+        return "Scheduled"
 
 
 def _count_apps(group, group_dict):
@@ -258,7 +377,7 @@ def group_table(groups):
 
 
 def package_table(packages):
-    """Returns a PrettyTable representation of the provided DCOS packages
+    """Returns a PrettyTable representation of the provided DC/OS packages
 
     :param packages: packages to render
     :type packages: [dict]
@@ -287,7 +406,7 @@ def package_table(packages):
 
 
 def package_search_table(search_results):
-    """Returns a PrettyTable representation of the provided DCOS package
+    """Returns a PrettyTable representation of the provided DC/OS package
     search results
 
     :param search_results: search_results, in the format of
@@ -300,8 +419,10 @@ def package_search_table(search_results):
     fields = OrderedDict([
         ('NAME', lambda p: p['name']),
         ('VERSION', lambda p: p['currentVersion']),
+        ('SELECTED', lambda p: p.get("selected", False)),
         ('FRAMEWORK', lambda p: p['framework']),
-        ('DESCRIPTION', lambda p: p['description'])
+        ('DESCRIPTION', lambda p: p['description']
+            if len(p['description']) < 77 else p['description'][0:77] + "...")
     ])
 
     packages = []
@@ -309,9 +430,10 @@ def package_search_table(search_results):
         package_ = copy.deepcopy(package)
         packages.append(package_)
 
-    tb = table(fields, packages, sortby="NAME")
+    tb = table(fields, packages)
     tb.align['NAME'] = 'l'
     tb.align['VERSION'] = 'l'
+    tb.align['SELECTED'] = 'l'
     tb.align['FRAMEWORK'] = 'l'
     tb.align['DESCRIPTION'] = 'l'
 
@@ -319,7 +441,7 @@ def package_search_table(search_results):
 
 
 def slave_table(slaves):
-    """Returns a PrettyTable representation of the provided DCOS slaves
+    """Returns a PrettyTable representation of the provided DC/OS slaves
 
     :param slaves: slaves to render.  dicts from /mesos/state-summary
     :type slaves: [dict]

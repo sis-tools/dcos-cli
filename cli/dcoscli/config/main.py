@@ -2,44 +2,33 @@ import collections
 
 import dcoscli
 import docopt
-import pkg_resources
 from dcos import cmds, config, emitting, http, util
-from dcos.errors import DCOSException
-from dcoscli import analytics
-from dcoscli.main import decorate_docopt_usage
+from dcos.errors import DCOSException, DefaultError
+from dcoscli.subcommand import default_command_info, default_doc
+from dcoscli.util import decorate_docopt_usage
 
 emitter = emitting.FlatEmitter()
 logger = util.get_logger(__name__)
 
 
-def main():
+def main(argv):
     try:
-        return _main()
+        return _main(argv)
     except DCOSException as e:
         emitter.publish(e)
         return 1
 
 
 @decorate_docopt_usage
-def _main():
-    util.configure_process_from_environ()
-
+def _main(argv):
     args = docopt.docopt(
-        _doc(),
+        default_doc("config"),
+        argv=argv,
         version='dcos-config version {}'.format(dcoscli.version))
 
     http.silence_requests_warnings()
 
     return cmds.execute(_cmds(), args)
-
-
-def _doc():
-    """
-    :rtype: str
-    """
-    return pkg_resources.resource_string(
-        'dcoscli',
-        'data/help/config.txt').decode('utf-8')
 
 
 def _cmds():
@@ -84,7 +73,7 @@ def _info(info):
     :rtype: int
     """
 
-    emitter.publish(_doc().split('\n')[0])
+    emitter.publish(default_command_info("config"))
     return 0
 
 
@@ -94,9 +83,16 @@ def _set(name, value):
     :rtype: int
     """
 
-    toml_config = config.set_val(name, value)
-    if (name == 'core.reporting' is True) or (name == 'core.email'):
-        analytics.segment_identify(toml_config)
+    if name == "package.sources":
+        notice = ("This config property has been deprecated. "
+                  "Please add your repositories with `dcos package repo add`")
+        return DCOSException(notice)
+    if name == "core.email":
+        notice = "This config property has been deprecated."
+        return DCOSException(notice)
+
+    toml, msg = config.set_val(name, value)
+    emitter.publish(DefaultError(msg))
 
     return 0
 
@@ -107,7 +103,9 @@ def _unset(name):
     :rtype: int
     """
 
-    config.unset(name)
+    msg = config.unset(name)
+    emitter.publish(DefaultError(msg))
+
     return 0
 
 
@@ -117,7 +115,7 @@ def _show(name):
     :rtype: int
     """
 
-    toml_config = util.get_config(True)
+    toml_config = config.get_config(True)
 
     if name is not None:
         value = toml_config.get(name)
@@ -130,6 +128,8 @@ def _show(name):
     else:
         # Let's list all of the values
         for key, value in sorted(toml_config.property_items()):
+            if key == "core.dcos_acs_token":
+                value = "*"*8
             emitter.publish('{}={}'.format(key, value))
 
     return 0
@@ -141,7 +141,7 @@ def _validate():
     :rtype: int
     """
 
-    toml_config = util.get_config(True)
+    toml_config = config.get_config(True)
 
     errs = util.validate_json(toml_config._dictionary,
                               config.generate_root_schema(toml_config))

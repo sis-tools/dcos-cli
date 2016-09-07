@@ -61,7 +61,7 @@ if (-Not(Get-Command git -errorAction SilentlyContinue))
   exit 1
 }
 
-echo "Installing DCOS CLI from PyPI..."
+echo "Installing DC/OS CLI from PyPI..."
 echo ""
 
 if (-Not([System.IO.Path]::IsPathRooted("$installation_path"))) {
@@ -73,7 +73,7 @@ if (-Not( Test-Path $installation_path)) {
 }
 
 & virtualenv $installation_path
-& $installation_path\Scripts\activate
+& $installation_path\Scripts\activate.ps1
 
 [int]$PYTHON_ARCHITECTURE=(python -c 'import struct;print( 8 * struct.calcsize(\"P\"))')
 
@@ -133,7 +133,7 @@ switch -regex ($add_path)
   default {PromptAddToPath "$installation_path\Scripts"}
 }
 
-echo "Finished installing and configuring DCOS CLI."
+echo "Finished installing and configuring DC/OS CLI."
 echo ""
 echo "Run this command to set up your environment and to get started:"
 echo "& $ACTIVATE_PATH; dcos help"

@@ -4,9 +4,9 @@
 #   CLUSTER_NAME
 #   CCM_AUTH_TOKEN
 #   DCOS_CHANNEL
+#   CF_TEMPLATE_NAME
 
 set -e
-set -x
 
 # create cluster
 CLUSTER_ID=$(http --ignore-stdin \https://ccm.mesosphere.com/api/cluster/ \
@@ -16,8 +16,8 @@ CLUSTER_ID=$(http --ignore-stdin \https://ccm.mesosphere.com/api/cluster/ \
      region=us-west-2 \
      time=120 \
      channel=$DCOS_CHANNEL \
-     cluster_desc="DCOS CLI testing cluster" \
-     template=single-master.cloudformation.json \
+     cluster_desc="DC/OS CLI testing cluster" \
+     template=$CF_TEMPLATE_NAME \
      adminlocation=0.0.0.0/0 \
      public_agents=0 \
      private_agents=1 | \

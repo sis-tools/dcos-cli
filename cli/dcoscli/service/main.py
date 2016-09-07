@@ -1,43 +1,32 @@
-import subprocess
-
 import dcoscli
 import docopt
-import pkg_resources
-from dcos import cmds, emitting, marathon, mesos, util
+import six
+from dcos import cmds, emitting, marathon, mesos, subprocess, util
 from dcos.errors import DCOSException, DefaultError
 from dcoscli import log, tables
-from dcoscli.main import decorate_docopt_usage
+from dcoscli.subcommand import default_command_info, default_doc
+from dcoscli.util import decorate_docopt_usage
 
 logger = util.get_logger(__name__)
 emitter = emitting.FlatEmitter()
 
 
-def main():
+def main(argv):
     try:
-        return _main()
+        return _main(argv)
     except DCOSException as e:
         emitter.publish(e)
         return 1
 
 
 @decorate_docopt_usage
-def _main():
-    util.configure_process_from_environ()
-
+def _main(argv):
     args = docopt.docopt(
-        _doc(),
+        default_doc("service"),
+        argv=argv,
         version="dcos-service version {}".format(dcoscli.version))
 
     return cmds.execute(_cmds(), args)
-
-
-def _doc():
-    """
-    :rtype: str
-    """
-    return pkg_resources.resource_string(
-        'dcoscli',
-        'data/help/service.txt').decode('utf-8')
 
 
 def _cmds():
@@ -78,7 +67,7 @@ def _info():
     :rtype: int
     """
 
-    emitter.publish(_doc().split('\n')[0])
+    emitter.publish(default_command_info("service"))
     return 0
 
 
@@ -102,7 +91,7 @@ def _service(inactive, completed, is_json):
         emitter.publish([service.dict() for service in services])
     else:
         table = tables.service_table(services)
-        output = str(table)
+        output = six.text_type(table)
         if output:
             emitter.publish(output)
 
@@ -141,6 +130,8 @@ def _log(follow, lines, ssh_config_file, service, file_):
     :rtype: int
     """
 
+    if lines is None:
+        lines = 10
     lines = util.parse_int(lines)
 
     if service == 'marathon':
@@ -284,4 +275,4 @@ def _log_marathon(follow, lines, ssh_config_file):
 
     emitter.publish(DefaultError("Running `{}`".format(cmd)))
 
-    return subprocess.call(cmd, shell=True)
+    return subprocess.Subproc().call(cmd, shell=True)

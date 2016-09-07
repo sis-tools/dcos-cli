@@ -6,41 +6,33 @@ import time
 import dcoscli
 import docopt
 import pkg_resources
+import six
 from dcos import cmds, emitting, http, jsonitem, marathon, options, util
 from dcos.errors import DCOSException
 from dcoscli import tables
-from dcoscli.main import decorate_docopt_usage
+from dcoscli.subcommand import default_command_info, default_doc
+from dcoscli.util import decorate_docopt_usage
 
 logger = util.get_logger(__name__)
 emitter = emitting.FlatEmitter()
 
 
-def main():
+def main(argv):
     try:
-        return _main()
+        return _main(argv)
     except DCOSException as e:
         emitter.publish(e)
         return 1
 
 
 @decorate_docopt_usage
-def _main():
-    util.configure_process_from_environ()
-
+def _main(argv):
     args = docopt.docopt(
-        _doc(),
+        default_doc("marathon"),
+        argv=argv,
         version='dcos-marathon version {}'.format(dcoscli.version))
 
     return cmds.execute(_cmds(), args)
-
-
-def _doc():
-    """
-    :rtype: str
-    """
-    return pkg_resources.resource_string(
-        'dcoscli',
-        'data/help/marathon.txt').decode('utf-8')
 
 
 def _cmds():
@@ -79,6 +71,11 @@ def _cmds():
             hierarchy=['marathon', 'task', 'list'],
             arg_keys=['<app-id>', '--json'],
             function=_task_list),
+
+        cmds.Command(
+            hierarchy=['marathon', 'task', 'stop'],
+            arg_keys=['<task-id>', '--wipe'],
+            function=_task_stop),
 
         cmds.Command(
             hierarchy=['marathon', 'task', 'show'],
@@ -188,7 +185,8 @@ def _marathon(config_schema, info):
     elif info:
         _info()
     else:
-        emitter.publish(options.make_generic_usage_message(_doc()))
+        doc = default_command_info("marathon")
+        emitter.publish(options.make_generic_usage_message(doc))
         return 1
 
     return 0
@@ -200,7 +198,7 @@ def _info():
     :rtype: int
     """
 
-    emitter.publish(_doc().split('\n')[0])
+    emitter.publish(default_command_info("marathon"))
     return 0
 
 
@@ -300,7 +298,7 @@ def _list(json_):
     else:
         deployments = client.get_deployments()
         table = tables.app_table(apps, deployments)
-        output = str(table)
+        output = six.text_type(table)
         if output:
             emitter.publish(output)
 
@@ -789,6 +787,27 @@ def _task_list(app_id, json_):
     return 0
 
 
+def _task_stop(task_id, wipe):
+    """Stop a Marathon task
+
+    :param task_id: the id of the task
+    :type task_id: str
+    :param wipe: whether to wipe persistent data and unreserve resources
+    :type wipe: bool
+    :returns: process return code
+    :rtype: int
+    """
+
+    client = marathon.create_client()
+    task = client.stop_task(task_id, wipe)
+
+    if task is None:
+        raise DCOSException("Task '{}' does not exist".format(task_id))
+
+    emitter.publish(task)
+    return 0
+
+
 def _task_show(task_id):
     """
     :param task_id: the task id
@@ -851,5 +870,5 @@ def _cli_config_schema():
     """
     return json.loads(
         pkg_resources.resource_string(
-            'dcoscli',
+            'dcos',
             'data/config-schema/marathon.json').decode('utf-8'))
